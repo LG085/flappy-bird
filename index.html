@@ -832,8 +832,18 @@
   // iOS só libera o áudio em alguns tipos de gesto: tenta em todos
   ['pointerup', 'touchend', 'click', 'keydown'].forEach(ev => window.addEventListener(ev, unlockAudio, { passive: true }));
 
+  // O iPhone costuma "congelar" o app em vez de fechá-lo. Se ele voltar depois de muito
+  // tempo fora de uma partida, recarrega para pegar a versão mais nova do jogo.
+  const RELOAD_AFTER_MS = 15 * 60 * 1000;
+  let hiddenAt = 0;
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && state === 'playing') paused = true;
+    if (document.hidden) {
+      hiddenAt = Date.now();
+      if (state === 'playing') paused = true;
+    } else if (hiddenAt && Date.now() - hiddenAt > RELOAD_AFTER_MS && state !== 'playing' && navigator.onLine) {
+      location.reload();
+      return;
+    }
     last = performance.now();
   });
   document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
@@ -845,7 +855,8 @@
   requestAnimationFrame(frame);
 
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    // updateViaCache 'none': o navegador sempre confere se há um sw.js novo no servidor
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {}));
   }
 })();
 </script>
