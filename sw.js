@@ -1,6 +1,6 @@
 // Service worker: deixa o jogo funcionar offline.
 // Estratégia: responde do cache e atualiza em segundo plano (a nova versão vale na abertura seguinte).
-const CACHE = 'flappy-bird-v1';
+const CACHE = 'flappy-bird-v2';
 const ASSETS = [
   './',
   'index.html',
