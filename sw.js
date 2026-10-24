@@ -2,11 +2,12 @@
 // - Página (index.html): busca primeiro na internet, então a versão nova já vale na primeira abertura.
 //   Sem internet (ou se a rede demorar), usa a cópia salva.
 // - Demais arquivos (ícones, manifesto): responde do cache e atualiza em segundo plano.
-const CACHE = 'flappy-bird-v3';
+const CACHE = 'flappy-bird-v4';
 const NETWORK_TIMEOUT_MS = 4000;
 const ASSETS = [
   './',
   'index.html',
+  'config.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

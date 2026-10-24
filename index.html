@@ -32,12 +32,66 @@
   body { display: flex; align-items: center; justify-content: center; }
   canvas { display: block; cursor: pointer; touch-action: none; }
   #safe { position: fixed; top: 0; left: 0; width: 1px; height: env(safe-area-inset-top); visibility: hidden; pointer-events: none; }
+
+  /* Janela de login do ranking (estilo do placar do jogo) */
+  #login {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: calc(env(safe-area-inset-top) + 9vh) 16px 16px;
+    background: rgba(0, 0, 0, .55);
+    touch-action: auto;
+  }
+  #login[hidden], #login [hidden] { display: none !important; }
+  #login .card {
+    width: 100%; max-width: 340px; box-sizing: border-box;
+    background: #ded895; border: 4px solid #543847; border-radius: 6px;
+    padding: 18px 16px 14px; color: #543847;
+    font: 600 15px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  }
+  #login h2 { margin: 0 0 8px; font-size: 18px; color: #e86a28; letter-spacing: 1px; }
+  #login p { margin: 0 0 12px; overflow-wrap: anywhere; }
+  #login input {
+    width: 100%; box-sizing: border-box; padding: 10px 12px;
+    font: 700 18px ui-monospace, Menlo, Consolas, monospace;   /* 18px evita o zoom automático do iOS */
+    border: 3px solid #543847; border-radius: 4px; background: #fffbe6; color: #543847;
+    -webkit-user-select: text; user-select: text;
+  }
+  #login .err { min-height: 1.4em; margin: 8px 0; color: #c0331f; }
+  #login .row { display: flex; gap: 10px; }
+  #login button {
+    flex: 1; padding: 11px 8px; cursor: pointer;
+    font: 700 16px ui-monospace, Menlo, Consolas, monospace;
+    border: 3px solid #543847; border-radius: 4px;
+    background: #fb9a2e; color: #fff; text-shadow: 1px 1px 0 #543847;
+  }
+  #login button.sec { background: #c9b97d; }
+  #login button:disabled { opacity: .6; }
+  #login button.link {
+    display: block; flex: none; margin: 12px auto 0; padding: 4px;
+    background: none; border: 0; color: #543847; text-shadow: none;
+    font-size: 14px; text-decoration: underline;
+  }
 </style>
 </head>
 <body>
 <div id="safe"></div>
 <canvas id="game" aria-label="Flappy Bird"></canvas>
 
+<div id="login" hidden>
+  <form class="card" id="lgForm" novalidate>
+    <h2 id="lgTitle"></h2>
+    <p id="lgText"></p>
+    <input id="lgInput" aria-labelledby="lgTitle">
+    <p class="err" id="lgErr" role="alert"></p>
+    <div class="row">
+      <button type="button" class="sec" id="lgCancel">Cancelar</button>
+      <button type="submit" id="lgOk"></button>
+    </div>
+    <button type="button" class="link" id="lgBack" hidden>Usar outro e-mail</button>
+  </form>
+</div>
+
+<script src="config.js"></script>
 <script>
 (() => {
   'use strict';
@@ -65,7 +119,8 @@
 
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
-    set(k, v) { try { localStorage.setItem(k, v); } catch { /* ignora */ } }
+    set(k, v) { try { localStorage.setItem(k, v); } catch { /* ignora */ } },
+    remove(k) { try { localStorage.removeItem(k); } catch { /* ignora */ } }
   };
 
   // ================= Utilidades de pixel art =================
@@ -357,6 +412,9 @@
   // ================= Estado =================
   let state, bird, pipes, score, dispScore, groundX, bgX, t, flash, deadFrames, overT, medalT, landed, newBest, paused, readyY;
   let scene, birdSprites, fadeT = -1;
+  let view = null;          // null (jogo), 'ranking' ou 'login'
+  let buttons = [];         // botões desenhados no quadro atual (para o toque)
+  let playTicks = 0, gameId = 0, sendStatus = null;
   let best = parseInt(store.get('flappy-pwa-best', '0'), 10) || 0;
   let muted = store.get('flappy-pwa-muted', '0') === '1';
   t = 0;
@@ -381,6 +439,7 @@
     flash = 0;
     deadFrames = 0; overT = 0; medalT = 0;
     landed = false; newBest = false; paused = false;
+    playTicks = 0; sendStatus = null; gameId++;
   }
 
   // ================= Áudio (WebAudio sintetizado, sem arquivos) =================
@@ -474,18 +533,14 @@
     flash = 1;
     deadFrames = 0; overT = 0; medalT = 0;
     if (score > best) { best = score; newBest = true; store.set('flappy-pwa-best', String(best)); }
+    submitScore(score, playTicks);
     sfx.hit();
     bird.crashFloor = onGround;
     if (onGround) { landed = true; bird.y = GROUND_Y - BIRD_R; }
     else bird.vy = 3.5;
   }
 
-  // Botão "JOGAR" do placar (reiniciar só pelo botão evita recomeçar sem querer)
-  const BTN = { w: 112, h: 40 };
-  function btnRect() {
-    const py = panelTop();
-    return { x: Math.round((W - BTN.w) / 2), y: py + 116 + 22, w: BTN.w, h: BTN.h };
-  }
+  // Reiniciar só pelo botão "JOGAR" do placar evita recomeçar sem querer
   const panelTop = () => Math.round(GROUND_Y * 0.36);
   const canRestart = () => state === 'dead' && landed && overT > 50;
 
@@ -525,6 +580,7 @@
     }
 
     if (state === 'playing') {
+      playTicks++;
       groundX += SPEED; bgX += SPEED;
       bird.vy = Math.min(bird.vy + GRAVITY, MAX_FALL);
       bird.y += bird.vy;
@@ -690,14 +746,68 @@
     drawText('RECORDE', px + 164, py + 72, 2, lc);
     drawText(String(best), px + 164, py + 96, 3);
 
-    if (canRestart()) {
-      const b = btnRect();
-      box(b.x, b.y, b.w, b.h, '#fb9a2e', '#ffc46b');
-      ctx.fillStyle = '#d8701c';
-      ctx.fillRect(b.x + 4, b.y + b.h - 6, b.w - 8, 2);
-      drawText('JOGAR', b.x + b.w / 2, b.y + b.h / 2 - 1, 3);
-    }
     ctx.restore();
+
+    if (canRestart()) {
+      button('JOGAR', Math.round((W - 112) / 2), py + ph + 22, 112, 40, restart, 3);
+      if (ONLINE) {
+        button('RANKING', Math.round((W - 112) / 2), py + ph + 72, 112, 32, openRanking, 2, '#73bf2e', '#9ce659');
+        const msg = SEND_MSG[sendStatus];
+        if (msg) drawText(msg, W / 2, py + ph + 124, 2);
+      }
+    }
+  }
+
+  const SEND_MSG = {
+    enviando: 'ENVIANDO PONTOS...',
+    enviado: 'PONTOS NO RANKING!',
+    pendente: 'SEM REDE: ENVIO DEPOIS',
+    login: 'ENTRE NO RANKING'
+  };
+
+  function button(label, x, y, w, h, fn, u = 2, fill = '#fb9a2e', hi = '#ffc46b') {
+    box(x, y, w, h, fill, hi);
+    drawText(label, x + w / 2, y + h / 2, u);
+    buttons.push({ x, y, w, h, fn });
+  }
+
+  // Tela do ranking semanal (desenhada no canvas, com a mesma fonte do jogo)
+  function drawRanking() {
+    buttons = [];   // só os botões do ranking respondem enquanto ele está aberto
+    ctx.fillStyle = 'rgba(0,0,0,.5)';
+    ctx.fillRect(0, 0, W, H);
+    const pw = 264, ph = 380, px = Math.round((W - pw) / 2);
+    const py = Math.max(Math.round(safeTop) + 16, Math.round((H - ph) / 2) - 20);
+    box(px, py, pw, ph, '#ded895', '#f4eeb4');
+    drawText('RANKING', W / 2, py + 22, 3, '#fb9a2e');
+    drawText(rk.label, W / 2, py + 48, 2, '#e86a28');
+
+    const off = ['#c9b97d', '#ddd09a'];
+    button('ESTA SEMANA', px + 8, py + 64, 144, 28, () => { rk.weeksAgo = 0; loadRanking(); }, 2, ...(rk.weeksAgo === 0 ? [] : off));
+    button('PASSADA', px + 158, py + 64, 98, 28, () => { rk.weeksAgo = 1; loadRanking(); }, 2, ...(rk.weeksAgo === 1 ? [] : off));
+
+    const midY = py + 200;
+    if (rk.status === 'loading') drawText('CARREGANDO...', W / 2, midY, 2);
+    else if (rk.status === 'erro') { drawText('SEM CONEXÃO', W / 2, midY - 12, 2); drawText('TOQUE NA SEMANA', W / 2, midY + 12, 2); drawText('PARA TENTAR DE NOVO', W / 2, midY + 34, 2); }
+    else if (rk.status === 'negado') { drawText('SEU E-MAIL NÃO', W / 2, midY - 12, 2); drawText('ESTÁ CONVIDADO', W / 2, midY + 12, 2); }
+    else if (rk.status === 'ok' && !rk.rows.length) { drawText('NINGUÉM JOGOU', W / 2, midY - 12, 2); drawText('NESTA SEMANA AINDA', W / 2, midY + 12, 2); }
+    else if (rk.status === 'ok') {
+      let list = rk.rows.slice(0, 10);
+      const me = rk.rows.find(r => r.eu);
+      if (me && !list.includes(me)) list = list.slice(0, 9).concat(me);
+      list.forEach((r, i) => {
+        const y = py + 104 + i * 22;
+        if (r.eu) { ctx.fillStyle = '#f4eeb4'; ctx.fillRect(px + 6, y - 1, pw - 12, 20); }
+        const medal = [null, MEDALS[1][1], MEDALS[2][1], MEDALS[3][1]][r.posicao];
+        if (medal) ctx.drawImage(medal, px + 14, y, 18, 18);
+        else drawText(String(r.posicao), px + 23, y + 9, 2);
+        drawText(String(r.apelido), px + 42, y + 9, 2, '#ffffff', 'left');
+        drawText(String(r.melhor), px + pw - 12, y + 9, 2, '#ffffff', 'right');
+      });
+    }
+
+    button('VOLTAR', px + 8, py + ph - 42, 144, 32, () => { view = null; });
+    if (session) button('SAIR', px + 158, py + ph - 42, 98, 32, askLogout, 2, ...off);
   }
 
   function drawHud() {
@@ -725,11 +835,16 @@
       } else {
         drawText('CLIQUE OU TECLE', W / 2, y, 2);
         drawText('ESPAÇO PARA VOAR', W / 2, y + 24, 2);
-        drawText('M = SOM   P = PAUSA', W / 2, GROUND_Y + 56, 2);
+        drawText('M = SOM   P = PAUSA', W / 2, H - 14, 2);
+      }
+      if (ONLINE) {
+        button('RANKING', Math.round((W - 130) / 2), GROUND_Y + 28, 130, 32, openRanking, 2, '#73bf2e', '#9ce659');
+        if (profile.apelido) drawText('OLÁ, ' + profile.apelido + '!', W / 2, GROUND_Y + 78, 2);
       }
     }
 
     if (state === 'dead' && landed) drawGameOver();
+    if (view === 'ranking') drawRanking();
 
     if (paused) {
       ctx.fillStyle = 'rgba(0,0,0,.45)';
@@ -740,6 +855,7 @@
   }
 
   function render() {
+    buttons = [];
     // tremida curta na batida
     const shake = state === 'dead' && deadFrames < 8;
     ctx.save();
@@ -808,18 +924,21 @@
     const r = canvas.getBoundingClientRect();
     const x = (e.clientX - r.left) * W / r.width;
     const y = (e.clientY - r.top) * H / r.height;
-    if (x > W - 44 && y < safeTop + 40) { unlockAudio(); toggleMute(); return; }
-    if (state === 'dead') {
-      unlockAudio();
-      const b = btnRect();
-      if (canRestart() && x >= b.x - 8 && x <= b.x + b.w + 8 && y >= b.y - 8 && y <= b.y + b.h + 8) restart();
-      return;
+    for (let i = buttons.length - 1; i >= 0; i--) {
+      const b = buttons[i];
+      if (x >= b.x - 6 && x <= b.x + b.w + 6 && y >= b.y - 6 && y <= b.y + b.h + 6) { unlockAudio(); b.fn(); return; }
     }
+    if (x > W - 44 && y < safeTop + 40) { unlockAudio(); toggleMute(); return; }
+    if (view || state === 'dead') { unlockAudio(); return; }
     flap();
   });
 
   window.addEventListener('keydown', (e) => {
-    if (e.repeat) return;
+    if (e.repeat || view === 'login') return;   // teclas vão para os campos do login
+    if (view === 'ranking') {
+      if (['Escape', 'Space', 'Enter'].includes(e.code)) { e.preventDefault(); view = null; }
+      return;
+    }
     if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'Enter') {
       e.preventDefault();
       if (state === 'dead') { if (canRestart()) restart(); }
@@ -850,9 +969,284 @@
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   window.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  // ================= Ranking online (Supabase, via REST, sem bibliotecas externas) =================
+  const CFG = window.FLAPPY_CONFIG || {};
+  const ONLINE = Boolean(CFG.supabaseUrl && CFG.supabaseKey);
+  const API = ONLINE ? String(CFG.supabaseUrl).replace(/\/+$/, '') : '';
+  const QUEUE_KEY = 'flappy-fila', SESSION_KEY = 'flappy-sessao', NICK_KEY = 'flappy-apelido';
+
+  let session = null;
+  try { session = JSON.parse(store.get(SESSION_KEY, 'null')); } catch { session = null; }
+  const profile = { apelido: store.get(NICK_KEY, '') };
+
+  const isNetworkError = (err) => err && (err.name === 'AbortError' || err instanceof TypeError);
+
+  async function api(path, body, auth) {
+    const headers = { apikey: CFG.supabaseKey, 'Content-Type': 'application/json' };
+    if (auth) {
+      const token = await accessToken();
+      if (!token) throw new Error('sem_login');
+      headers.Authorization = 'Bearer ' + token;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    let res;
+    try {
+      res = await fetch(API + path, { method: 'POST', headers, body: JSON.stringify(body || {}), signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) {
+      const msg = (data && (data.message || data.msg || data.error_description || data.error)) || ('http_' + res.status);
+      throw Object.assign(new Error(String(msg)), { status: res.status });
+    }
+    return data;
+  }
+  const rpc = (name, args) => api('/rest/v1/rpc/' + name, args, true);
+
+  function saveSession(data, email) {
+    session = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at || Math.floor(Date.now() / 1000) + (data.expires_in || 3600),
+      email
+    };
+    store.set(SESSION_KEY, JSON.stringify(session));
+  }
+  function clearSession() {
+    session = null;
+    store.remove(SESSION_KEY);
+    setApelido('');
+  }
+  function setApelido(nick) {
+    profile.apelido = nick || '';
+    if (nick) store.set(NICK_KEY, nick); else store.remove(NICK_KEY);
+  }
+
+  let refreshing = null;
+  async function accessToken() {
+    if (!session) return null;
+    if (session.expires_at * 1000 - 60000 > Date.now()) return session.access_token;
+    if (!refreshing) {
+      refreshing = (async () => {
+        try {
+          const data = await api('/auth/v1/token?grant_type=refresh_token', { refresh_token: session.refresh_token }, false);
+          saveSession(data, session.email);
+        } catch (err) {
+          // sessão recusada pelo servidor: pede login de novo (sem rede, tenta depois)
+          if (!isNetworkError(err) && err.status >= 400 && err.status < 500) clearSession();
+        } finally {
+          refreshing = null;
+        }
+      })();
+    }
+    await refreshing;
+    return session ? session.access_token : null;
+  }
+
+  // ---------- Envio das partidas (com fila para quando estiver sem internet) ----------
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
+    : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
+  function loadQueue() { try { const q = JSON.parse(store.get(QUEUE_KEY, '[]')); return Array.isArray(q) ? q : []; } catch { return []; } }
+  function saveQueue(q) { store.set(QUEUE_KEY, JSON.stringify(q)); }
+
+  function submitScore(pontos, ticks) {
+    if (!ONLINE) return;
+    if (!session || !profile.apelido) { sendStatus = 'login'; return; }
+    const q = loadQueue();
+    q.push({ id: uuid(), pontos, duracao_ms: Math.round(ticks * 1000 / 60), jogada_em: new Date().toISOString() });
+    saveQueue(q.slice(-50));
+    const game = gameId;
+    sendStatus = 'enviando';
+    flushQueue().then(ok => { if (game === gameId) sendStatus = ok ? 'enviado' : 'pendente'; });
+  }
+
+  let flushing = null;
+  function flushQueue() {
+    if (!ONLINE || !session) return Promise.resolve(false);
+    if (flushing) return flushing;
+    flushing = (async () => {
+      for (let q = loadQueue(); q.length; q = loadQueue()) {
+        const it = q[0];
+        try {
+          await rpc('registrar_partida', { p_id: it.id, p_pontos: it.pontos, p_duracao_ms: it.duracao_ms, p_jogada_em: it.jogada_em });
+        } catch (err) {
+          // sem rede, sem login ou erro do servidor: guarda para tentar depois
+          if (isNetworkError(err) || err.message === 'sem_login' || err.status === 401 || err.status === 403 || err.status >= 500) return false;
+          // recusada pelas regras (ex.: partida antiga): descarta
+        }
+        saveQueue(loadQueue().filter(x => x.id !== it.id));
+      }
+      if (sendStatus === 'pendente') sendStatus = 'enviado';   // a internet voltou com o placar na tela
+      return true;
+    })().finally(() => { flushing = null; });
+    return flushing;
+  }
+
+  // ---------- Ranking ----------
+  const rk = { status: 'idle', rows: [], weeksAgo: 0, label: '', req: 0 };
+  function weekLabel(n) {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7 * n);
+    const e = new Date(d);
+    e.setDate(d.getDate() + 6);
+    const f = x => String(x.getDate()).padStart(2, '0') + '/' + String(x.getMonth() + 1).padStart(2, '0');
+    return f(d) + ' A ' + f(e);
+  }
+  async function loadRanking() {
+    const req = ++rk.req;
+    rk.status = 'loading';
+    rk.rows = [];
+    rk.label = weekLabel(rk.weeksAgo);
+    try {
+      const rows = await rpc('ranking_semana', { p_semanas_atras: rk.weeksAgo });
+      if (req !== rk.req) return;
+      rk.rows = Array.isArray(rows) ? rows : [];
+      rk.status = 'ok';
+    } catch (err) {
+      if (req !== rk.req) return;
+      if (err.message === 'sem_login') { view = null; openLogin('email'); return; }
+      rk.status = /nao_autorizado/.test(err.message) ? 'negado' : 'erro';
+    }
+  }
+  function openRanking() {
+    if (!ONLINE) return;
+    if (!session) { openLogin('email'); return; }
+    if (!profile.apelido) { openLogin('nick'); return; }
+    view = 'ranking';
+    rk.weeksAgo = 0;
+    loadRanking();
+    flushQueue();
+  }
+  function askLogout() {
+    if (!window.confirm('Sair do ranking neste aparelho?')) return;
+    const token = session && session.access_token;
+    if (token) {
+      fetch(API + '/auth/v1/logout', { method: 'POST', headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + token } }).catch(() => {});
+    }
+    clearSession();
+    saveQueue([]);
+    view = null;
+  }
+
+  // ---------- Janela de login (e-mail -> código -> apelido) ----------
+  const $ = (id) => document.getElementById(id);
+  const lg = {
+    el: $('login'), form: $('lgForm'), title: $('lgTitle'), text: $('lgText'), input: $('lgInput'),
+    err: $('lgErr'), ok: $('lgOk'), cancel: $('lgCancel'), back: $('lgBack'),
+    step: 'email', email: '', busy: false
+  };
+  const STEPS = {
+    email: {
+      title: 'ENTRAR NO RANKING', ok: 'Enviar código',
+      text: () => 'Digite o e-mail que você passou para o organizador. Vamos enviar um código de acesso.',
+      input: { type: 'email', inputMode: 'email', autocomplete: 'email', placeholder: 'seu@email.com', maxLength: 254, autocapitalize: 'off' }
+    },
+    code: {
+      title: 'DIGITE O CÓDIGO', ok: 'Entrar',
+      text: () => 'Enviamos um código para ' + lg.email + '. Se não chegar em 1 minuto, confira o spam.',
+      input: { type: 'text', inputMode: 'numeric', autocomplete: 'one-time-code', placeholder: '123456', maxLength: 10, autocapitalize: 'off' }
+    },
+    nick: {
+      title: 'ESCOLHA SEU APELIDO', ok: 'Salvar',
+      text: () => 'É o nome que aparece no ranking: de 2 a 10 letras ou números, sem espaço.',
+      input: { type: 'text', inputMode: 'text', autocomplete: 'off', placeholder: 'APELIDO', maxLength: 10, autocapitalize: 'characters' }
+    }
+  };
+  function setStep(step) {
+    const s = STEPS[step];
+    lg.step = step;
+    lg.title.textContent = s.title;
+    lg.text.textContent = s.text();
+    lg.ok.textContent = s.ok;
+    lg.err.textContent = '';
+    lg.input.value = '';
+    for (const k in s.input) lg.input[k] = s.input[k];
+    lg.input.setAttribute('autocapitalize', s.input.autocapitalize);
+    lg.back.hidden = step !== 'code';
+    setTimeout(() => lg.input.focus(), 60);
+  }
+  function openLogin(step) {
+    view = 'login';
+    lg.el.hidden = false;
+    setStep(step);
+  }
+  function closeLogin() {
+    lg.input.blur();
+    lg.el.hidden = true;
+    if (view === 'login') view = null;
+  }
+  function friendly(err) {
+    const m = String((err && err.message) || '');
+    if (isNetworkError(err)) return 'Sem conexão com a internet. Tente de novo.';
+    if (m === 'email_invalido') return 'Digite um e-mail válido.';
+    if (m === 'codigo_curto') return 'Digite o código completo que chegou no e-mail.';
+    if (/email_nao_convidado|Database error/i.test(m)) return 'Este e-mail não está na lista de convidados. Fale com o organizador.';
+    if (/nao_autorizado/.test(m)) return 'Seu e-mail não está na lista de convidados.';
+    if (err.status === 429 || /rate limit|security purposes/i.test(m)) return 'Muitas tentativas. Aguarde alguns minutos e tente de novo.';
+    if (/expired|invalid/i.test(m) && lg.step === 'code') return 'Código errado ou vencido. Confira ou peça outro.';
+    if (/apelido_em_uso/.test(m)) return 'Esse apelido já está em uso. Escolha outro.';
+    if (/apelido_invalido/.test(m)) return 'Use de 2 a 10 letras ou números, sem espaço nem acento.';
+    return 'Algo deu errado. Tente de novo.';
+  }
+
+  lg.input.addEventListener('input', () => {
+    if (lg.step === 'nick') lg.input.value = lg.input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+  });
+  lg.cancel.addEventListener('click', closeLogin);
+  lg.back.addEventListener('click', () => setStep('email'));
+  lg.form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (lg.busy) return;
+    const v = lg.input.value.trim();
+    lg.busy = true;
+    lg.ok.disabled = true;
+    lg.err.textContent = '';
+    try {
+      if (lg.step === 'email') {
+        const email = v.toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('email_invalido');
+        await api('/auth/v1/otp', { email, create_user: true }, false);
+        lg.email = email;
+        setStep('code');
+      } else if (lg.step === 'code') {
+        const code = v.replace(/\D/g, '');
+        if (code.length < 6) throw new Error('codigo_curto');
+        const data = await api('/auth/v1/verify', { type: 'email', email: lg.email, token: code }, false);
+        saveSession(data, lg.email);
+        const perfil = await rpc('meu_perfil', {});
+        const p = Array.isArray(perfil) ? perfil[0] : perfil;
+        if (!p || !p.convidado) { clearSession(); throw new Error('nao_autorizado'); }
+        if (p.apelido) { setApelido(p.apelido); closeLogin(); openRanking(); }
+        else setStep('nick');
+      } else {
+        const nick = v.toUpperCase();
+        if (!/^[A-Z0-9]{2,10}$/.test(nick)) throw new Error('apelido_invalido');
+        const saved = await rpc('definir_apelido', { p_apelido: nick });
+        setApelido(typeof saved === 'string' && saved ? saved : nick);
+        closeLogin();
+        openRanking();
+      }
+    } catch (err) {
+      lg.err.textContent = friendly(err);
+    } finally {
+      lg.busy = false;
+      lg.ok.disabled = false;
+    }
+  });
+
   // ================= Início =================
   reset();
   requestAnimationFrame(frame);
+  if (ONLINE && session) {
+    flushQueue();
+    if (!profile.apelido) rpc('meu_perfil', {}).then(r => { const p = Array.isArray(r) ? r[0] : r; if (p && p.apelido) setApelido(p.apelido); }).catch(() => {});
+  }
+  window.addEventListener('online', () => flushQueue());
 
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     // updateViaCache 'none': o navegador sempre confere se há um sw.js novo no servidor
