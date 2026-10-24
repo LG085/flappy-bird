@@ -102,8 +102,30 @@
   const GROUND_H = 112;
   const GRAVITY = 0.25, FLAP = -4.6, MAX_FALL = 8;
   const CRASH_GRAVITY = 0.5, CRASH_MAX = 7.5;
-  const SPEED = 2;
-  const PIPE_W = 52, BODY_W = 48, CAP_H = 24, GAP = 100, SPACING = 150;
+  const SPEED = 2;   // velocidade inicial; durante a partida sobe com a dificuldade
+  const PIPE_W = 52, BODY_W = 48, CAP_H = 24, SPACING = 150;
+
+  // Curva de dificuldade, interpolada entre os pontos de controle pela pontuação.
+  // gap = abertura entre os canos (px); speed = velocidade; spread = quanto a altura da
+  // abertura varia (0 a 1); moving = chance de o cano subir e descer.
+  const DIFFICULTY = [
+    { at: 0,   gap: 100, speed: 2.0, spread: 0.0, moving: 0 },
+    { at: 10,  gap: 100, speed: 2.0, spread: 0.3, moving: 0 },
+    { at: 30,  gap: 92,  speed: 2.2, spread: 0.6, moving: 0 },
+    { at: 60,  gap: 86,  speed: 2.4, spread: 1.0, moving: 0.25 },
+    { at: 80,  gap: 84,  speed: 2.5, spread: 1.0, moving: 0.3 },
+    { at: 100, gap: 84,  speed: 2.6, spread: 1.0, moving: 0.45 }
+  ];
+  const MAX_CLIMB = 130, MAX_DROP = 160;   // maior mudança de altura entre canos vizinhos (px)
+  function difficulty(points) {
+    const D = DIFFICULTY;
+    if (points >= D[D.length - 1].at) return D[D.length - 1];
+    let i = 0;
+    while (points >= D[i + 1].at) i++;
+    const a = D[i], b = D[i + 1], k = (points - a.at) / (b.at - a.at);
+    const lerp = (x, y) => x + (y - x) * k;
+    return { gap: lerp(a.gap, b.gap), speed: lerp(a.speed, b.speed), spread: lerp(a.spread, b.spread), moving: a.moving };
+  }
   const BIRD_X = 76, BIRD_R = 10;
   const STEP = 1000 / 60;
 
@@ -415,6 +437,7 @@
   let view = null;          // null (jogo), 'ranking' ou 'login'
   let buttons = [];         // botões desenhados no quadro atual (para o toque)
   let playTicks = 0, gameId = 0, sendStatus = null;
+  let speed = SPEED, spawned = 0;
   let best = parseInt(store.get('flappy-pwa-best', '0'), 10) || 0;
   let muted = store.get('flappy-pwa-muted', '0') === '1';
   t = 0;
@@ -440,6 +463,7 @@
     deadFrames = 0; overT = 0; medalT = 0;
     landed = false; newBest = false; paused = false;
     playTicks = 0; sendStatus = null; gameId++;
+    speed = SPEED; spawned = 0;
   }
 
   // ================= Áudio (WebAudio sintetizado, sem arquivos) =================
@@ -501,15 +525,27 @@
   };
 
   // ================= Lógica =================
-  // Abertura sorteada numa faixa central (como no FlapPyBird) e com salto limitado
-  // entre canos vizinhos, para não ficar impossível em telas altas.
+  // Abertura sorteada numa faixa central (como no FlapPyBird) que se alarga com a
+  // dificuldade, com salto limitado entre canos vizinhos para nunca ficar impossível.
   function spawnPipe(x) {
-    const range = Math.min(GROUND_Y * 0.6 - GAP, 180);
-    const min = Math.round(GROUND_Y * 0.5 - (range + GAP) / 2);
-    let gapY = min + Math.random() * range;
+    const d = difficulty(spawned++);   // o cano n vale o ponto n+1
+    const gap = Math.round(d.gap);
+    const range = Math.min(GROUND_Y * (0.6 + 0.1 * d.spread) - gap, 140 + 80 * d.spread);
+    const min = GROUND_Y * 0.5 - (range + gap) / 2;
+    const amp = Math.random() < d.moving ? 14 + Math.random() * 14 : 0;   // cano que sobe e desce
+    let lo = min + amp, hi = min + range - amp;
     const prev = pipes[pipes.length - 1];
-    if (prev) gapY = Math.max(prev.gapY - 150, Math.min(prev.gapY + 150, gapY));
-    pipes.push({ x, gapY: Math.round(gapY), scored: false });
+    if (prev) {
+      lo = Math.max(lo, prev.baseY - (MAX_CLIMB - prev.amp - amp));
+      hi = Math.min(hi, prev.baseY + (MAX_DROP - prev.amp - amp));
+    }
+    const baseY = Math.round(lo + Math.random() * Math.max(0, hi - lo));
+    const p = { x, gap, baseY, gapY: baseY, amp, w: 0.025 + Math.random() * 0.01, phase: Math.random() * Math.PI * 2, scored: false };
+    movePipe(p);
+    pipes.push(p);
+  }
+  function movePipe(p) {
+    if (p.amp) p.gapY = Math.round(p.baseY + Math.sin(p.phase + playTicks * p.w) * p.amp);
   }
 
   function circleRect(cx, cy, r, rx, ry, rw, rh) {
@@ -520,7 +556,7 @@
   }
 
   function pipeHit(p) {
-    const bot = p.gapY + GAP;
+    const bot = p.gapY + p.gap;
     return circleRect(bird.x, bird.y, BIRD_R, p.x + 2, -1000, BODY_W, 1000 + p.gapY - CAP_H) ||
            circleRect(bird.x, bird.y, BIRD_R, p.x, p.gapY - CAP_H, PIPE_W, CAP_H) ||
            circleRect(bird.x, bird.y, BIRD_R, p.x, bot, PIPE_W, CAP_H) ||
@@ -581,14 +617,15 @@
 
     if (state === 'playing') {
       playTicks++;
-      groundX += SPEED; bgX += SPEED;
+      speed += Math.max(-0.01, Math.min(0.01, difficulty(score).speed - speed));   // acelera aos poucos
+      groundX += speed; bgX += speed;
       bird.vy = Math.min(bird.vy + GRAVITY, MAX_FALL);
       bird.y += bird.vy;
       // sobe inclinado ~20 graus; depois do topo do pulo mergulha até 90 graus
       bird.rot = bird.vy < 0 ? -0.35 : Math.min(bird.rot + 0.06, 1.57);
       if (bird.y < -40) { bird.y = -40; if (bird.vy < 0) bird.vy = 0; }   // pode sair um pouco pelo topo, como no original
 
-      for (const p of pipes) p.x -= SPEED;
+      for (const p of pipes) { p.x -= speed; movePipe(p); }
       if (pipes.length && pipes[0].x + PIPE_W < -4) pipes.shift();
       while (pipes[pipes.length - 1].x + SPACING <= W + 10) spawnPipe(pipes[pipes.length - 1].x + SPACING);
 
@@ -665,7 +702,7 @@
   }
   function drawPipes() {
     for (const p of pipes) {
-      const x = Math.round(p.x), top = p.gapY, bot = p.gapY + GAP;
+      const x = Math.round(p.x), top = p.gapY, bot = p.gapY + p.gap;
       pipeBody(x, -4, top - CAP_H + 4);
       pipeCap(x, top - CAP_H);
       pipeBody(x, bot + CAP_H, GROUND_Y - bot - CAP_H + 4);
@@ -1191,6 +1228,7 @@
     if (/expired|invalid/i.test(m) && lg.step === 'code') return 'Código errado ou vencido. Confira ou peça outro.';
     if (/apelido_em_uso/.test(m)) return 'Esse apelido já está em uso. Escolha outro.';
     if (/apelido_invalido/.test(m)) return 'Use de 2 a 10 letras ou números, sem espaço nem acento.';
+    if (/error sending/i.test(m)) return 'Não conseguimos enviar o e-mail agora. Avise o organizador do ranking.';
     return 'Algo deu errado. Tente de novo.';
   }
 
