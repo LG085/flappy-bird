@@ -2,7 +2,7 @@
 // - Página (index.html): busca primeiro na internet, então a versão nova já vale na primeira abertura.
 //   Sem internet (ou se a rede demorar), usa a cópia salva.
 // - Demais arquivos (ícones, manifesto): responde do cache e atualiza em segundo plano.
-const CACHE = 'flappy-bird-v4';
+const CACHE = 'flappy-bird-v5';
 const NETWORK_TIMEOUT_MS = 4000;
 const ASSETS = [
   './',
@@ -12,7 +12,8 @@ const ASSETS = [
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',
-  'icons/apple-touch-icon.png'
+  'icons/apple-touch-icon.png',
+  ...Array.from({ length: 13 }, (_, i) => 'fotos/' + String(i + 1).padStart(2, '0') + '.jpg')
 ];
 
 self.addEventListener('install', (e) => {

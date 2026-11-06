@@ -437,7 +437,7 @@
   let view = null;          // null (jogo), 'ranking' ou 'login'
   let buttons = [];         // botões desenhados no quadro atual (para o toque)
   let playTicks = 0, gameId = 0, sendStatus = null;
-  let speed = SPEED, spawned = 0;
+  let speed = SPEED, spawned = 0, meme = null;
   let best = parseInt(store.get('flappy-pwa-best', '0'), 10) || 0;
   let muted = store.get('flappy-pwa-muted', '0') === '1';
   t = 0;
@@ -463,7 +463,7 @@
     deadFrames = 0; overT = 0; medalT = 0;
     landed = false; newBest = false; paused = false;
     playTicks = 0; sendStatus = null; gameId++;
-    speed = SPEED; spawned = 0;
+    speed = SPEED; spawned = 0; meme = null;
   }
 
   // ================= Áudio (WebAudio sintetizado, sem arquivos) =================
@@ -524,6 +524,40 @@
     medal:  () => play(t0 => { osc('square', 1319, 1319, t0, 0.06, 0.07); osc('square', 1760, 1760, t0 + 0.06, 0.06, 0.07); osc('square', 2093, 2093, t0 + 0.12, 0.2, 0.07); })
   };
 
+  // ================= Memes no fundo =================
+  // A cada MEME_EVERY pontos um meme aparece no céu, atrás dos canos. A ordem é sorteada e
+  // fica salva no aparelho, para todos aparecerem antes de algum repetir.
+  const MEME_COUNT = 13, MEME_EVERY = 10, MEME_FRAMES = 300, MEME_FADE = 30, MEME_MAX = 200;
+  const memeImgs = Array.from({ length: MEME_COUNT }, (_, i) => {
+    const img = new Image();
+    img.src = 'fotos/' + String(i + 1).padStart(2, '0') + '.jpg';
+    return img;
+  });
+  function shuffledDeck(avoidFirst) {
+    const deck = memeImgs.map((_, i) => i);
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    if (deck[0] === avoidFirst) deck.push(deck.shift());
+    return deck;
+  }
+  function nextMemeIndex() {
+    let saved = null;
+    try { saved = JSON.parse(store.get('flappy-memes', 'null')); } catch { saved = null; }
+    let deck = saved && Array.isArray(saved.deck) && saved.deck.length === MEME_COUNT ? saved.deck : shuffledDeck();
+    let pos = saved && deck === saved.deck ? saved.pos : 0;
+    if (!(pos >= 0 && pos < deck.length)) { deck = shuffledDeck(deck[deck.length - 1]); pos = 0; }
+    store.set('flappy-memes', JSON.stringify({ deck, pos: pos + 1 }));
+    return deck[pos];
+  }
+  function showMeme() {
+    for (let i = 0; i < MEME_COUNT; i++) {   // pula imagens que não carregaram
+      const img = memeImgs[nextMemeIndex()];
+      if (img.complete && img.naturalWidth) { meme = { img, t: 0 }; return; }
+    }
+  }
+
   // ================= Lógica =================
   // Abertura sorteada numa faixa central (como no FlapPyBird) que se alarga com a
   // dificuldade, com salto limitado entre canos vizinhos para nunca ficar impossível.
@@ -568,6 +602,7 @@
     state = 'dead';
     flash = 1;
     deadFrames = 0; overT = 0; medalT = 0;
+    if (meme) meme.t = Math.max(meme.t, MEME_FRAMES - MEME_FADE);   // some junto com a partida
     if (score > best) { best = score; newBest = true; store.set('flappy-pwa-best', String(best)); }
     submitScore(score, playTicks);
     sfx.hit();
@@ -603,6 +638,7 @@
   function step() {
     t++;
     if (flash > 0) flash = Math.max(0, flash - 0.07);
+    if (meme && ++meme.t >= MEME_FRAMES) meme = null;
     if (fadeT >= 0) {
       fadeT++;
       if (fadeT === 12) reset();
@@ -630,7 +666,10 @@
       while (pipes[pipes.length - 1].x + SPACING <= W + 10) spawnPipe(pipes[pipes.length - 1].x + SPACING);
 
       for (const p of pipes) {
-        if (!p.scored && p.x + PIPE_W / 2 < bird.x) { p.scored = true; score++; sfx.score(); }
+        if (!p.scored && p.x + PIPE_W / 2 < bird.x) {
+          p.scored = true; score++; sfx.score();
+          if (score % MEME_EVERY === 0) showMeme();
+        }
         if (pipeHit(p)) { die(false); return; }
       }
       if (bird.y + BIRD_R >= GROUND_Y) die(true);
@@ -677,6 +716,21 @@
     drawLayer(scene.layers.clouds, GROUND_Y - 30, bgX * 0.1);
     drawLayer(scene.layers.city, GROUND_Y - 4, bgX * 0.25);
     drawLayer(scene.layers.bush, GROUND_Y, bgX * 0.5);
+  }
+
+  function drawMeme() {
+    if (!meme) return;
+    const f = Math.min(1, meme.t / MEME_FADE, (MEME_FRAMES - meme.t) / MEME_FADE);
+    const k = Math.min(MEME_MAX / meme.img.width, MEME_MAX / meme.img.height) * (0.9 + 0.1 * f);
+    const w = Math.round(meme.img.width * k), h = Math.round(meme.img.height * k);
+    const x = Math.round((W - w) / 2), y = Math.round(GROUND_Y * 0.42 - h / 2);
+    ctx.save();
+    ctx.globalAlpha = f;
+    box(x - 6, y - 6, w + 12, h + 12, '#ffffff');
+    ctx.imageSmoothingEnabled = true;   // a foto é suavizada para o texto do meme continuar legível
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(meme.img, x, y, w, h);
+    ctx.restore();
   }
 
   const BANDS = [0, 0.06, 0.2, 0.3, 0.72, 1];
@@ -898,6 +952,7 @@
     ctx.save();
     if (shake) ctx.translate(Math.round((Math.random() * 2 - 1) * 3), Math.round((Math.random() * 2 - 1) * 3));
     drawBackground();
+    drawMeme();
     drawPipes();
     drawGround();
     drawBird();
